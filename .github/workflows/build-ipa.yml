@@ -1,0 +1,67 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  XCODE_VERSION: "26.4"
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+    - name: Build Archive
+      run: |
+        xcodebuild archive \
+          -project OpenClaude.xcodeproj \
+          -scheme OpenClaude \
+          -destination "generic/platform=iOS" \
+          -archivePath "build/OpenClaude.xcarchive" \
+          -configuration Release \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_IDENTITY="" \
+          IPHONEOS_DEPLOYMENT_TARGET=26.0 \
+          SWIFT_VERSION=6.0
+    - name: Create IPA
+      run: |
+        mkdir -p build/Payload
+        cp -R build/OpenClaude.xcarchive/Products/Applications/OpenClaude.app build/Payload/
+        cd build && zip -r OpenClaude-unsigned.ipa Payload
+    - name: Upload IPA
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenClaude-unsigned-ipa
+        path: build/OpenClaude-unsigned.ipa
+        retention-days: 30
+    - name: Create Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: OpenClaude Build ${{ github.run_number }}
+        draft: false
+        prerelease: true
+        files: build/OpenClaude-unsigned.ipa
+        body: |
+          ## OpenClaude iOS Build ${{ github.run_number }}
+          **Target:** iOS 26.0+ | **Xcode:** 26.4 | **Swift:** 6.0
+          
+          ### Features
+          - Multi-provider LLM support (OpenAI, Anthropic, Hugging Face, Ollama)
+          - Local model support with GGUF format
+          - Embedded API server
+          - Tool execution (bash, file, grep, web)
+          
+          ### Installation
+          This is an **unsigned IPA**. Install with AltStore, Sideloadly, or sign with your certificate.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
