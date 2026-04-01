@@ -1,9 +1,14 @@
 import Foundation
 
-protocol Tool {
+struct ToolArguments: @unchecked Sendable {
+    let raw: [String: Any]
+    subscript(_ key: String) -> Any? { return raw[key] }
+}
+
+protocol Tool: Sendable {
     var name: String { get }
     var description: String { get }
-    func execute(arguments: [String: Any]) async throws -> String
+    func execute(arguments: ToolArguments) async throws -> String
 }
 
 @MainActor
@@ -43,19 +48,20 @@ class ToolExecutor: ObservableObject {
             logExecution(name: toolCall.name, arguments: [:], result: result.output, startTime: startTime, isError: true)
             return result
         }
-        guard let argumentsData = toolCall.arguments.data(using: .utf8), let arguments = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
+        guard let argumentsData = toolCall.arguments.data(using: .utf8), let rawArgs = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
             let result = Message.ToolResult(toolCallId: toolCall.id, output: "Error: Invalid arguments JSON", isError: true)
             logExecution(name: toolCall.name, arguments: [:], result: result.output, startTime: startTime, isError: true)
             return result
         }
+        let arguments = ToolArguments(raw: rawArgs)
         do {
             let output = try await tool.execute(arguments: arguments)
             let result = Message.ToolResult(toolCallId: toolCall.id, output: output, isError: false)
-            logExecution(name: toolCall.name, arguments: arguments, result: output, startTime: startTime, isError: false)
+            logExecution(name: toolCall.name, arguments: rawArgs, result: output, startTime: startTime, isError: false)
             return result
         } catch {
             let result = Message.ToolResult(toolCallId: toolCall.id, output: "Error: \(error.localizedDescription)", isError: true)
-            logExecution(name: toolCall.name, arguments: arguments, result: result.output, startTime: startTime, isError: true)
+            logExecution(name: toolCall.name, arguments: rawArgs, result: result.output, startTime: startTime, isError: true)
             return result
         }
     }
@@ -75,7 +81,7 @@ class ToolExecutor: ObservableObject {
 struct BashToolImpl: Tool {
     let name = "bash"
     let description = "Execute bash commands"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let command = arguments["command"] as? String else { throw ToolError.missingParameter("command") }
         let blockedCommands = ["rm -rf /", "mkfs", "dd if=/dev/zero", ":(){ :|:& };:"]
         for blocked in blockedCommands { if command.contains(blocked) { throw ToolError.blockedCommand } }
@@ -86,7 +92,7 @@ struct BashToolImpl: Tool {
 struct FileReadTool: Tool {
     let name = "file_read"
     let description = "Read file contents"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let path = arguments["path"] as? String else { throw ToolError.missingParameter("path") }
         let offset = arguments["offset"] as? Int ?? 0
         let limit = arguments["limit"] as? Int ?? 100
@@ -112,7 +118,7 @@ struct FileReadTool: Tool {
 struct FileWriteTool: Tool {
     let name = "file_write"
     let description = "Write to file"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let path = arguments["path"] as? String, let content = arguments["content"] as? String else { throw ToolError.missingParameter("path or content") }
         let url = URL(fileURLWithPath: path)
         let directory = url.deletingLastPathComponent()
@@ -125,7 +131,7 @@ struct FileWriteTool: Tool {
 struct FileEditTool: Tool {
     let name = "file_edit"
     let description = "Edit file by replacing text"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let path = arguments["path"] as? String, let oldString = arguments["old_string"] as? String, let newString = arguments["new_string"] as? String else { throw ToolError.missingParameter("path, old_string, or new_string") }
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: path) else { throw ToolError.fileNotFound }
@@ -140,7 +146,7 @@ struct FileEditTool: Tool {
 struct GrepToolImpl: Tool {
     let name = "grep"
     let description = "Search files with regex"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let pattern = arguments["pattern"] as? String, let path = arguments["path"] as? String else { throw ToolError.missingParameter("pattern or path") }
         let include = arguments["include"] as? String
         let url = URL(fileURLWithPath: path)
@@ -202,7 +208,7 @@ struct GrepToolImpl: Tool {
 struct GlobTool: Tool {
     let name = "glob"
     let description = "Find files by pattern"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let pattern = arguments["pattern"] as? String else { throw ToolError.missingParameter("pattern") }
         let path = arguments["path"] as? String ?? "."
         let baseURL = URL(fileURLWithPath: path)
@@ -228,7 +234,7 @@ struct GlobTool: Tool {
 struct WebFetchTool: Tool {
     let name = "web_fetch"
     let description = "Fetch URL content"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let urlString = arguments["url"] as? String, let url = URL(string: urlString) else { throw ToolError.missingParameter("url") }
         let (data, response) = try await URLSession.shared.data(from: url)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { throw ToolError.networkError }
@@ -258,7 +264,7 @@ struct WebFetchTool: Tool {
 struct WebSearchTool: Tool {
     let name = "web_search"
     let description = "Search the web"
-    func execute(arguments: [String: Any]) async throws -> String {
+    func execute(arguments: ToolArguments) async throws -> String {
         guard let query = arguments["query"] as? String else { throw ToolError.missingParameter("query") }
         let numResults = min(arguments["num_results"] as? Int ?? 5, 10)
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
