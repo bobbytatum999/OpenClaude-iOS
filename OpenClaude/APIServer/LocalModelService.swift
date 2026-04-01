@@ -1,5 +1,129 @@
 import Foundation
-import NaturalLanguage
+import llama
+
+actor LlamaEngine {
+    private var model: OpaquePointer?
+    private var context: OpaquePointer?
+    private var batch: llama_batch?
+    
+    init(modelPath: String, contextSize: UInt32 = 4096) throws {
+        llama_backend_init()
+        
+        var modelParams = llama_model_default_params()
+        // Enable Metal for fast inference on iOS
+        modelParams.n_gpu_layers = 99
+        
+        self.model = llama_load_model_from_file(modelPath.cString(using: .utf8), modelParams)
+        guard self.model != nil else {
+            throw LocalModelError.modelLoadFailed
+        }
+        
+        var ctxParams = llama_context_default_params()
+        ctxParams.n_ctx = contextSize
+        ctxParams.n_threads = 4
+        ctxParams.n_threads_batch = 4
+        
+        self.context = llama_new_context_with_model(self.model, ctxParams)
+        guard self.context != nil else {
+            llama_free_model(self.model)
+            self.model = nil
+            throw LocalModelError.modelLoadFailed
+        }
+    }
+    
+    func unload() {
+        if let batch = self.batch {
+            llama_batch_free(batch)
+            self.batch = nil
+        }
+        if let ctx = self.context {
+            llama_free(ctx)
+            self.context = nil
+        }
+        if let model = self.model {
+            llama_free_model(model)
+            self.model = nil
+        }
+        llama_backend_free()
+    }
+    
+    private func tokenize(text: String, addBos: Bool) -> [llama_token] {
+        guard let ctx = context else { return [] }
+        var tokens = [llama_token](repeating: 0, count: Int(llama_n_ctx(ctx)))
+        let n_tokens = llama_tokenize(model, text.cString(using: .utf8), Int32(text.utf8.count), &tokens, Int32(tokens.count), addBos, false)
+        if n_tokens < 0 {
+            return []
+        }
+        return Array(tokens.prefix(Int(n_tokens)))
+    }
+    
+    private func addToBatch(_ batch: inout llama_batch, token: llama_token, pos: Int32, seq_id: Int32, logits: Bool) {
+        let idx = Int(batch.n_tokens)
+        batch.token[idx] = token
+        batch.pos[idx] = pos
+        batch.n_seq_id[idx] = 1
+        batch.seq_id[idx]![0] = seq_id
+        batch.logits[idx] = logits ? 1 : 0
+        batch.n_tokens += 1
+    }
+    
+    private func tokenToStr(token: llama_token) -> String {
+        var buf = [CChar](repeating: 0, count: 64)
+        _ = llama_token_to_piece(model, token, &buf, Int32(buf.count), 0, false)
+        return String(cString: buf)
+    }
+    
+    func infer(prompt: String, maxTokens: Int) -> String {
+        guard let ctx = context, let mdl = model else { return "Model not loaded properly." }
+        
+        let tokens = tokenize(text: prompt, addBos: true)
+        if batch == nil {
+            batch = llama_batch_init(512, 0, 1)
+        }
+        guard var b = batch else { return "Failed to init batch." }
+        b.n_tokens = 0
+        
+        for (i, token) in tokens.enumerated() {
+            let isLast = (i == tokens.count - 1)
+            addToBatch(&b, token: token, pos: Int32(i), seq_id: 0, logits: isLast)
+        }
+        
+        guard llama_decode(ctx, b) == 0 else { return "Error: llama_decode failed on prompt." }
+        
+        var response = ""
+        var currentIdx = Int32(tokens.count)
+        
+        for _ in 0..<maxTokens {
+            let n_vocab = llama_n_vocab(mdl)
+            guard let logits = llama_get_logits_ith(ctx, b.n_tokens - 1) else { break }
+            
+            var candidates = (0..<n_vocab).map { i in
+                llama_token_data(id: i, logit: logits[Int(i)], p: 0)
+            }
+            
+            var candidates_p = llama_token_data_array(data: &candidates, size: candidates.count, sorted: false)
+            let new_token = llama_sample_token_greedy(ctx, &candidates_p)
+            
+            if new_token == llama_token_eos(mdl) || new_token == llama_token_eot(mdl) {
+                break
+            }
+            
+            response += tokenToStr(token: new_token)
+            
+            b.n_tokens = 0
+            addToBatch(&b, token: new_token, pos: currentIdx, seq_id: 0, logits: true)
+            currentIdx += 1
+            
+            if llama_decode(ctx, b) != 0 {
+                break
+            }
+            // Need to update the stored batch pointer with the mutated batch so it doesn't leak
+            self.batch = b
+        }
+        
+        return response
+    }
+}
 
 @MainActor
 class LocalModelService: ObservableObject {
@@ -9,8 +133,8 @@ class LocalModelService: ObservableObject {
     @Published var isModelLoaded = false
     @Published var loadedModelId: String?
     @Published var isGenerating = false
-    private var modelContextStore: [String: String] = [:]
-    private let tokenizer = NLTokenizer(unit: .word)
+    
+    private var engine: LlamaEngine?
 
     init() {}
 
@@ -19,52 +143,57 @@ class LocalModelService: ObservableObject {
         return modelManager.downloadedModels.map { LLMModel(id: $0.modelId, name: $0.name, description: "Local GGUF", contextWindow: 8192, supportsTools: false, supportsVision: false) }
     }
 
+
+
     func loadModel(modelId: String) async throws {
         let modelManager = ModelManager.shared
         guard let modelPath = modelManager.getLocalModelPath(modelId: modelId) else { throw LocalModelError.modelNotFound }
         guard FileManager.default.fileExists(atPath: modelPath) else { throw LocalModelError.modelFileMissing }
+        
+        if let currentEngine = engine {
+            await currentEngine.unload()
+        }
+        
+        let newEngine = try LlamaEngine(modelPath: modelPath)
+        self.engine = newEngine
+        
         isModelLoaded = true
         loadedModelId = modelId
-        print("Loaded model: \(modelId) from \(modelPath)")
+        print("Loaded llama.cpp engine for model: \(modelId) from \(modelPath)")
     }
 
-    func unloadModel() { isModelLoaded = false; loadedModelId = nil; modelContextStore.removeAll() }
+    func unloadModel() async {
+        if let currentEngine = engine {
+            await currentEngine.unload()
+        }
+        engine = nil
+        isModelLoaded = false
+        loadedModelId = nil
+    }
 
     func generate(messages: [LLMMessagePayload], temperature: Double = 0.7, maxTokens: Int = 2048) async -> String {
+        guard let currentEngine = engine else { return "No model loaded." }
         isGenerating = true
         defer { isGenerating = false }
-        let lastUserMessage = messages.last(where: { $0.role == "user" })?.content ?? ""
-        let processingTime = min(Double(lastUserMessage.count) * 0.001, 2.0)
-        try? await Task.sleep(nanoseconds: UInt64(processingTime * 1_000_000_000))
-        return generateContextualResponse(for: lastUserMessage)
+        
+        let prompt = buildPrompt(from: messages)
+        return await currentEngine.infer(prompt: prompt, maxTokens: maxTokens)
     }
 
     private func buildPrompt(from messages: [LLMMessagePayload]) -> String {
         var prompt = ""
         for message in messages {
             switch message.role {
-            case "system": prompt += "[SYSTEM]\n\(message.content)\n"
-            case "user": prompt += "[USER]\n\(message.content)\n"
-            case "assistant": prompt += "[ASSISTANT]\n\(message.content)\n"
-            case "tool": prompt += "[TOOL]\n\(message.content)\n"
+            case "system": prompt += "<|system|>\n\(message.content)\n"
+            case "user": prompt += "<|user|>\n\(message.content)\n"
+            case "assistant": prompt += "<|assistant|>\n\(message.content)\n"
+            case "tool": prompt += "<|tool|>\n\(message.content)\n"
             default: prompt += "\(message.content)\n"
             }
         }
-        prompt += "[ASSISTANT]\n"
+        prompt += "<|assistant|>\n"
         return prompt
     }
-
-    private func generateContextualResponse(for query: String) -> String {
-        let lowerQuery = query.lowercased()
-        if lowerQuery.contains("hello") || lowerQuery.contains("hi") { return "Hello! I'm running locally on your device. How can I help you today?" }
-        if lowerQuery.contains("code") || lowerQuery.contains("programming") { return "I can help with coding tasks. Since I'm running locally, I can assist with code review, debugging, and writing new code. What would you like to work on?" }
-        if lowerQuery.contains("file") || lowerQuery.contains("read") { return "I have access to file operations through the tool system. You can ask me to read, write, or edit files on your device." }
-        if lowerQuery.contains("model") || lowerQuery.contains("llm") { return "I'm a locally-running language model. You can download GGUF format models from Hugging Face to use with this app." }
-        if lowerQuery.contains("help") { return "I'm OpenClaude, an AI assistant running locally. I can help with coding, file operations, and general assistance." }
-        return "I understand your question. As a locally-running model, I'm here to help with a variety of tasks. Could you provide more details?"
-    }
-
-    func estimateTokenCount(for text: String) -> Int { text.count / 4 }
 }
 
 enum LocalModelError: Error, LocalizedError {
@@ -73,7 +202,7 @@ enum LocalModelError: Error, LocalizedError {
         switch self {
         case .modelNotFound: return "Model not found"
         case .modelFileMissing: return "Model file missing"
-        case .modelLoadFailed: return "Failed to load model"
+        case .modelLoadFailed: return "Failed to load llama.cpp context"
         case .inferenceFailed: return "Inference failed"
         case .contextTooLong: return "Context too long"
         }

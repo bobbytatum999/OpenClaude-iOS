@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BBAA0003 /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = BBAA0002 /* llama */; };
 		AA000001 /* OpenClaudeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000 /* OpenClaudeApp.swift */; };
 		AA000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002 /* ContentView.swift */; };
 		AA000005 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004 /* ChatView.swift */; };
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BBAA0003 /* llama in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -171,6 +173,7 @@
 			);
 			name = OpenClaude;
 			packageProductDependencies = (
+				BBAA0002 /* llama */,
 			);
 			productName = OpenClaude;
 			productReference = AA100000 /* OpenClaude.app */;
@@ -201,6 +204,7 @@
 			);
 			mainGroup = AA300000;
 			packageReferences = (
+				BBAA0001 /* XCRemoteSwiftPackageReference "llama.cpp" */,
 			);
 			productRefGroup = AA300002 /* Products */;
 			projectDirPath = "";
@@ -249,6 +253,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		BBAA0001 /* XCRemoteSwiftPackageReference "llama.cpp" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ggerganov/llama.cpp.git";
+			requirement = {
+				kind = branch;
+				branch = master;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BBAA0002 /* llama */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BBAA0001 /* XCRemoteSwiftPackageReference "llama.cpp" */;
+			productName = llama;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA600000 /* Debug */ = {
