@@ -17,11 +17,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
     - name: Select Xcode
-      run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+      run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_26.4_Release_Candidate.app/Contents/Developer
     - name: List SDKs
       run: xcodebuild -showsdks
     - name: List Available Destinations
       run: xcodebuild -list -project OpenClaude.xcodeproj
+    - name: Download iOS Platform
+      run: xcodebuild -downloadPlatform iOS || true
     - name: Build Archive
       run: |
         xcodebuild archive \
