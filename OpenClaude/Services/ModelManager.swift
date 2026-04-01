@@ -153,3 +153,17 @@ class ModelManager: ObservableObject {
         loadDownloadedModels()
     }
 }
+
+enum ModelError: Error, LocalizedError {
+    case alreadyDownloading, noGGUFFiles, downloadFailed, invalidURL, modelNotFound, insufficientStorage
+    var errorDescription: String? {
+        switch self {
+        case .alreadyDownloading: return "A download is already in progress"
+        case .noGGUFFiles: return "No GGUF files found"
+        case .downloadFailed: return "Failed to download model"
+        case .invalidURL: return "Invalid download URL"
+        case .modelNotFound: return "Model not found"
+        case .insufficientStorage: return "Insufficient storage"
+        }
+    }
+}

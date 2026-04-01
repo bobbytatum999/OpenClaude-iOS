@@ -38,7 +38,7 @@ struct CodeSearch: Sendable {
         var results: [SearchResult] = []
         guard let enumerator = fileManager.enumerator(at: baseURL, includingPropertiesForKeys: [.isRegularFileKey]) else { return results }
         let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-        for case let fileURL as URL in enumerator {
+        while let fileURL = enumerator.nextObject() as? URL {
             guard !fileURL.hasDirectoryPath else { continue }
             if !fileTypes.isEmpty {
                 guard fileTypes.contains(fileURL.pathExtension) else { continue }

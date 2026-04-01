@@ -66,10 +66,8 @@ struct AnimatedDots: View {
                 Circle().fill(.secondary).frame(width: 3, height: 3).opacity(phase == index ? 1 : 0.3)
             }
         }
-        .onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
-                phase = (phase + 1) % 3
-            }
+        .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
+            phase = (phase + 1) % 3
         }
     }
 }
