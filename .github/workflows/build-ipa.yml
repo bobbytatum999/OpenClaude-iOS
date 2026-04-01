@@ -18,11 +18,16 @@ jobs:
       uses: actions/checkout@v4
     - name: Select Xcode
       run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+    - name: List SDKs
+      run: xcodebuild -showsdks
+    - name: List Available Destinations
+      run: xcodebuild -list -project OpenClaude.xcodeproj
     - name: Build Archive
       run: |
         xcodebuild archive \
           -project OpenClaude.xcodeproj \
           -scheme OpenClaude \
+          -sdk iphoneos \
           -destination "generic/platform=iOS" \
           -archivePath "build/OpenClaude.xcarchive" \
           -configuration Release \
@@ -54,12 +59,6 @@ jobs:
         body: |
           ## OpenClaude iOS Build ${{ github.run_number }}
           **Target:** iOS 26.0+ | **Xcode:** 26.4 | **Swift:** 6.0
-          
-          ### Features
-          - Multi-provider LLM support (OpenAI, Anthropic, Hugging Face, Ollama)
-          - Local model support with GGUF format
-          - Embedded API server
-          - Tool execution (bash, file, grep, web)
           
           ### Installation
           This is an **unsigned IPA**. Install with AltStore, Sideloadly, or sign with your certificate.
